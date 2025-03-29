@@ -10,29 +10,71 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const userMap = new Map();
-let counter = 1;
+
+const playerCollision = (player, id) => {
+  let hasCollision = false; 
+  let collidedPlayerId = null;
+  Array.from(userMap.keys()).forEach((userId) => {
+    let otherPlayer = userMap.get(userId);
+    if (!otherPlayer) return; 
+    if (id !== userId) {
+      if (Math.abs(otherPlayer.positions.x - player.positions.x) <= 20 &&
+          Math.abs(otherPlayer.positions.y - player.positions.y) <= 20) {
+        console.log( otherPlayer.positions.y , player.positions.y)
+        hasCollision = true;
+        collidedPlayerId = userId
+        player.messageTrueFor = id;
+        player.receiverId = userId;
+        otherPlayer.messageTrueFor = userId;
+        otherPlayer.receiverId = id;
+      }
+    }
+  });
+
+  if (!hasCollision) {
+    player.messageTrueFor = null;
+    player.receiverId = null;
+  }
+  if (collidedPlayerId) {
+    let otherPlayer = userMap.get(collidedPlayerId)
+    if (otherPlayer) {
+      otherPlayer.messageTrueFor = hasCollision ? collidedPlayerId : null;
+      otherPlayer.receiverId = hasCollision ? id : null;
+    }
+  }
+
+  return player; 
+};
+
+const moveDown = (id) => {
+  let player = userMap.get(id);
+  if (!player) return; // Exit if player does not exist
+
+  player.positions.y += 10; // Move player down
+
+  // Check for collision
+  let updatedPlayer = playerCollision(player, id);
+
+  userMap.set(id, updatedPlayer); 
+};
 
 const moveUp = (id) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.y -= 10;
-    userMap.set(id, player);
+    let updatedPlayer = playerCollision(player, id);
+    userMap.set(id, updatedPlayer); 
   }
 };
 
-const moveDown = (id) => {
-  let player = userMap.get(id);
-  if (player) {
-    player.positions.y += 10;
-    userMap.set(id, player);
-  }
-};
 
 const moveRight = (id) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.x += 10;
-    userMap.set(id, player);
+    let updatedPlayer = playerCollision(player, id);
+    userMap.set(id, updatedPlayer); 
+
   }
 };
 
@@ -40,14 +82,15 @@ const moveLeft = (id) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.x -= 10;
-    userMap.set(id, player);
+    let updatedPlayer = playerCollision(player, id);
+    userMap.set(id, updatedPlayer); 
   }
 };
 wss.on("connection", (ws) => {
   const userId = uuid();
-  let x = Math.random() * 800;
-  let y = Math.random() * 600;
-  userMap.set(userId, { ws, positions: { x: x, y: y } });
+  let x = Math.round((Math.random() * 800)/10) * 10
+  let y = Math.round((Math.random() * 600) / 10) * 10;
+  userMap.set(userId, { ws, positions: { x: x, y: y } ,message:false ,receiverId:null });
   ws.send(
     JSON.stringify({
       type: "connected-user",
@@ -99,6 +142,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     userMap.delete(userId);
+console.log(userMap.size)
   });
 });
 
