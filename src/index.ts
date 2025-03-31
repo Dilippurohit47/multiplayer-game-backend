@@ -11,86 +11,112 @@ const wss = new WebSocketServer({ server });
 
 const userMap = new Map();
 
-const playerCollision = (player, id) => {
-  let hasCollision = false; 
+type PlayerType ={
+  ws:WebSocket;
+  positions:{x:number ,y:number};
+  messageTrueFor : string | null;
+  receiverId:string | null;
+}
+
+const checkCollision = (pos1:{x:number ,y:number}, pos2:{x:number,y:number}) => {
+  return (
+    Math.abs(pos1.x - pos2.x) <= 20 &&
+    Math.abs(pos1.y - pos2.y) <= 20
+  );
+};
+
+const playerCollision = (player:PlayerType, id:string) => {
+  let hasCollision = false;
   let collidedPlayerId = null;
   Array.from(userMap.keys()).forEach((userId) => {
     let otherPlayer = userMap.get(userId);
-    if (!otherPlayer) return; 
-    if (id !== userId) {
-      if (Math.abs(otherPlayer.positions.x - player.positions.x) <= 20 &&
-          Math.abs(otherPlayer.positions.y - player.positions.y) <= 20) {
-        console.log( otherPlayer.positions.y , player.positions.y)
-        hasCollision = true;
-        collidedPlayerId = userId
-        player.messageTrueFor = id;
-        player.receiverId = userId;
-        otherPlayer.messageTrueFor = userId;
-        otherPlayer.receiverId = id;
-      }
+    if (!otherPlayer || id === userId) return;
+    if (checkCollision(otherPlayer.positions, player.positions)) {
+      hasCollision = true;
+      collidedPlayerId = userId;
+      player.messageTrueFor = id;
+      player.receiverId = userId;
+      otherPlayer.messageTrueFor = userId;
+      otherPlayer.receiverId = id;
+      userMap.set(userId, otherPlayer);
     }
-  });
+  }); 
 
   if (!hasCollision) {
     player.messageTrueFor = null;
     player.receiverId = null;
   }
-  if (collidedPlayerId) {
-    let otherPlayer = userMap.get(collidedPlayerId)
-    if (otherPlayer) {
-      otherPlayer.messageTrueFor = hasCollision ? collidedPlayerId : null;
-      otherPlayer.receiverId = hasCollision ? id : null;
+  return player;
+};
+
+const updateOtherPlayers = (movedPlayerId:string) => {
+  const movedPlayer = userMap.get(movedPlayerId);
+  Array.from(userMap.keys()).forEach((otherId) => {
+    if (otherId === movedPlayerId) return;
+    const otherPlayer = userMap.get(otherId);
+    if (otherPlayer.receiverId === movedPlayerId) {
+      const stillColliding = checkCollision(
+        otherPlayer.positions,
+        movedPlayer.positions
+      );
+      if (!stillColliding) {
+        otherPlayer.messageTrueFor = null;
+        otherPlayer.receiverId = null;
+        userMap.set(otherId, otherPlayer);
+      }
     }
-  }
-
-  return player; 
+  });
 };
 
-const moveDown = (id) => {
+const moveDown = (id:string) => {
   let player = userMap.get(id);
-  if (!player) return; // Exit if player does not exist
-
-  player.positions.y += 10; // Move player down
-
-  // Check for collision
+  if (!player) return;
+  player.positions.y += 10;
   let updatedPlayer = playerCollision(player, id);
-
-  userMap.set(id, updatedPlayer); 
+  userMap.set(id, updatedPlayer);
+  updateOtherPlayers(id);
 };
 
-const moveUp = (id) => {
+const moveUp = (id:string) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.y -= 10;
     let updatedPlayer = playerCollision(player, id);
-    userMap.set(id, updatedPlayer); 
+    userMap.set(id, updatedPlayer);
+    updateOtherPlayers(id);
   }
 };
 
-
-const moveRight = (id) => {
+const moveRight = (id:string) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.x += 10;
     let updatedPlayer = playerCollision(player, id);
-    userMap.set(id, updatedPlayer); 
-
+    userMap.set(id, updatedPlayer);
+    updateOtherPlayers(id);
   }
 };
 
-const moveLeft = (id) => {
+const moveLeft = (id:string) => {
   let player = userMap.get(id);
   if (player) {
     player.positions.x -= 10;
     let updatedPlayer = playerCollision(player, id);
-    userMap.set(id, updatedPlayer); 
+    userMap.set(id, updatedPlayer);
+    updateOtherPlayers(id);
   }
 };
+
 wss.on("connection", (ws) => {
   const userId = uuid();
-  let x = Math.round((Math.random() * 800)/10) * 10
+  let x = Math.round((Math.random() * 800) / 10) * 10;
   let y = Math.round((Math.random() * 600) / 10) * 10;
-  userMap.set(userId, { ws, positions: { x: x, y: y } ,message:false ,receiverId:null });
+  userMap.set(userId, {
+    ws,
+    positions: { x, y },
+    messageTrueFor: null,
+    receiverId: null,
+  });
   ws.send(
     JSON.stringify({
       type: "connected-user",
@@ -101,8 +127,32 @@ wss.on("connection", (ws) => {
   ws.onmessage = (m) => {
     const data = JSON.parse(m.data);
     if (data.type === "get-players") {
-      const players = Array.from(userMap.keys());
-      players.map((id) => {
+      Array.from(userMap.keys()).forEach((id) => {
+        let ws = userMap.get(id).ws;
+        ws.send(
+          JSON.stringify({
+            type: "get-players",
+            players: Object.fromEntries(userMap),
+          })
+        );
+      });
+    }
+    if (data.type === "move") {
+      switch (data.direction) {
+        case "moveUp":
+          moveUp(data.id);
+          break;
+        case "moveDown":
+          moveDown(data.id);
+          break;
+        case "moveRight":
+          moveRight(data.id);
+          break;
+        case "moveLeft":
+          moveLeft(data.id);
+          break;
+      }
+      Array.from(userMap.keys()).forEach((id) => {
         let ws = userMap.get(id).ws;
         ws.send(
           JSON.stringify({
@@ -113,39 +163,26 @@ wss.on("connection", (ws) => {
       });
     }
 
-    if (data.type === "move") {
-      if (data.direction === "moveUp") {
-        moveUp(data.id);
-      }
-      if (data.direction === "moveDown") {
-        moveDown(data.id);
-      }
-      if (data.direction === "moveRight") {
-        moveRight(data.id);
-      }
-      if (data.direction === "moveLeft") {
-        moveLeft(data.id);
-      }
-
-      const players = Array.from(userMap.keys());
-      players.map((id) => {
-        let ws = userMap.get(id).ws;
-        ws.send(
-          JSON.stringify({
-            type: "get-players",
-            players: Object.fromEntries(userMap),
-          })
-        );
-      });
+    if(data.type === "personal-msg"){
+      console.log("message",data.message)
+      const receiver = userMap.get(data.receiverId).ws
+      receiver.send(JSON.stringify({type:"personal-msg" , message:data.message,senderId:userId}))
     }
   };
-
   ws.on("close", () => {
     userMap.delete(userId);
-console.log(userMap.size)
+    Array.from(userMap.keys()).forEach((id) => {
+      let ws = userMap.get(id).ws;
+      ws.send(
+        JSON.stringify({
+          type: "get-players",
+          players: Object.fromEntries(userMap),
+        })
+      );
+    });
   });
 });
 
 server.listen(5000, () => {
-  console.log(`server is running on http//:localhost:5000`);
+  console.log("Server is running on http://localhost:5000");
 });
